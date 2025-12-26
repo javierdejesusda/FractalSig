@@ -42,19 +42,21 @@ def load_and_save_data(
 
 def augment_for_fourier_inversion(data, no, seq_len, dim, mirror_augmentation):
     """
-    Augment the paths with time, sin(time), cos(time) - 1 for Fourier inversion.
+    PATCHED BY FractalSig: Time-only augmentation for PyTorch decoder compatibility.
+    
+    Original function added sin(time), cos(time)-1 which inflated signature dimensions
+    from ~254 to ~14,569. This patch maintains ONLY time augmentation.
+    
+    The data already contains [time, path] channels from main.py generation.
+    We only need to add the leading zero and optional mirror augmentation.
     """
-    time_range = seq_len + 1
-    if mirror_augmentation:
-        time_range *= 2
-    time = np.linspace(0, 2 * np.pi, time_range)
-    time = np.tile(time, (no, 1, 1)).reshape(no, time_range, 1)
-    sin_time = np.sin(time)
-    cos_time_minus_1 = np.cos(time) - 1
+    # Add leading zero for signature computation
     data = np.concatenate((np.zeros((no, 1, dim)), data), axis=1)
+    
     if mirror_augmentation:
         data = np.concatenate((data, data[:, ::-1, :]), axis=1)
-    data = np.concatenate((time, sin_time, cos_time_minus_1, data), axis=2)
+    
+    # NO sin/cos augmentation - signature dimension stays at ~254 for dim=2, depth=7
     return data
 
 
@@ -85,7 +87,7 @@ def take_log_signatures(
 
     data = augment_for_fourier_inversion(data, no, seq_len, dim, mirror_augmentation)
 
-    s = iisignature.prepare(dim + 3, sig_depth)
+    s = iisignature.prepare(dim, sig_depth)  # PATCHED: was dim + 3
     logsigs = iisignature.logsig(data, s)
 
     logsigs = clip_quantiles(logsigs, 0.001, 0.999)

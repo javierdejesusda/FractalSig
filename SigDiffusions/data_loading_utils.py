@@ -83,6 +83,27 @@ def load_weather_data(data_path, seq_len, dim):
     return chop_into_windows(data[:, :, 0], seq_len, stride=5)
 
 
+def load_numpy_data(data_path, seq_len, dim):
+    """Load pre-generated numpy data directly.
+
+    This is used for FractalSig rough volatility data that is already
+    preprocessed with time augmentation.
+
+    Args:
+        data_path: Path to .npy file with shape (N, seq_len, dim).
+        seq_len: Expected sequence length (for validation).
+        dim: Expected dimensions (for validation).
+
+    Returns:
+        np.ndarray: Loaded data.
+    """
+    data = np.load(data_path)
+    print(f"Loaded data from {data_path}: shape={data.shape}")
+    assert data.shape[1] == seq_len, f"seq_len mismatch: {data.shape[1]} vs {seq_len}"
+    assert data.shape[2] == dim, f"dim mismatch: {data.shape[2]} vs {dim}"
+    return data
+
+
 def minmax_scale_features(data):
     """
     Scales the features of the data to the range [0, 1] using min-max scaling.
