@@ -1,0 +1,48 @@
+# FractalSig Requirements
+# Generated based on working WSL2 environment with RTX 4070
+
+# Core
+numpy==2.2.2
+matplotlib==3.10.0
+scipy==1.15.1
+pyyaml==6.0.2
+tqdm==4.67.1
+pillow==12.0.0
+scikit-learn==1.6.1
+pyparsing==3.2.1
+six==1.17.0
+sympy==1.13.1
+
+# PyTorch (Assumes CUDA 12.x)
+torch==2.5.1
+
+# Signature & Wavelets
+# IMPORTANT: iisignature requires --no-build-isolation to compile correctly on some WSL2 environments
+# Run: pip install iisignature==0.24 --no-build-isolation
+# iisignature==0.24
+ptwt==1.0.1
+pywavelets==1.9.0
+
+# JAX (CUDA Support)
+# Run: pip install -U "jax[cuda12]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
+jax==0.4.38
+jaxlib==0.4.38
+jax-cuda12-pjrt==0.4.38
+jax-cuda12-plugin==0.4.38
+
+# JAX Ecosystem
+diffrax==0.6.2
+equinox==0.11.11
+lineax==0.0.8
+optimistix==0.0.11
+jaxtyping==0.2.36
+optax==0.2.4
+chex==0.1.90
+
+# Configuration & Utilities
+hydra-core==1.3.2
+omegaconf==2.3.0
+fbm==0.3.0
+typeguard==2.13.3
+torchdiffeq==0.2.5
+scienceplots

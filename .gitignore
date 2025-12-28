@@ -1,5 +1,38 @@
-*.sh
-.vs
-data/
-__pycache__
+# OS junk files
+.DS_Store
+Thumbs.db
+
+# Virtual Environments
+venv/
+.venv/
+env/
+.env/
+Miniconda3-latest-Linux-x86_64.sh
+
+# Python/IDEs
+__pycache__/
+*.py[cod]
+*$py.class
+.vs/
+.idea/
+.vscode/
+
+# Data and Artifacts (Local only)
+/data/
+/outputs/
+/results/
+/checkpoints/
+/model_checkpoints/
+
+# JAX SigDiffusions specific
+SigDiffusions/data/
+SigDiffusions/model_checkpoints/
+SigDiffusions/logs/
+SigDiffusions/config/fractal.yaml
+
+# Binary/Heavy files
+*.npy
+*.pth
+*.pkl
 *.png
+*.backup_original*

@@ -1,0 +1,12 @@
+# @package _global_
+# FractalSig: Cluster Profile (High Performance)
+# Settings for cluster GPUs with larger VRAM (e.g., A100, V100).
+# Uses larger batch sizes and hidden dimensions for faster training.
+
+pipeline:
+  batch_size: 64
+  hidden_dim: 256
+  sig_depth: 7
+
+jax:
+  memory_fraction: 0.95

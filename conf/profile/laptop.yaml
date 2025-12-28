@@ -1,0 +1,12 @@
+# @package _global_
+# FractalSig: Laptop Profile (RTX 4070, 8GB VRAM)
+# Optimized settings for consumer GPU with limited VRAM.
+# Reduces batch size and hidden dimensions while maintaining sig_depth=7.
+
+pipeline:
+  batch_size: 16
+  hidden_dim: 256
+  sig_depth: 7
+
+jax:
+  memory_fraction: 0.90

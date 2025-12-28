@@ -1,0 +1,75 @@
+# FractalSig: Master Configuration
+# The definitive Hydra configuration for Rough Volatility Generation.
+#
+# Usage:
+#   python main.py +profile=laptop mode=auto
+#   python main.py +profile=cluster mode=auto force_retrain=true
+#
+# Modes:
+#   - auto: Intelligent pipeline (checks for existing artifacts)
+#   - gen_data: Generate training data only
+#   - train_decoder: Train PyTorch decoder only
+#   - train_jax: Train JAX model only
+#   - sample: Sample and decode only
+
+defaults:
+  - _self_
+
+# Experiment Metadata
+experiment: "fractal_production"
+mode: ???  # REQUIRED: auto, gen_data, train_decoder, train_jax, sample
+force_retrain: false  # Set true to bypass checkpoint checks in auto mode
+
+# Pipeline Settings (Can be overridden by profile)
+pipeline:
+  batch_size: 32
+  hidden_dim: 256
+  sig_depth: 7  # Determines signature dimension
+  decoder_epochs: 1000
+
+# Data Generation Configuration
+gen_data:
+  n_samples: 5000
+  seq_len: 256
+  H: 0.1  # Hurst parameter for rough volatility
+  output: "data/rough_volatility.npy"
+  seed: 42
+
+# PyTorch Decoder Training (uses pipeline.* values)
+train_decoder:
+  n_samples: 5000
+  epochs: ${pipeline.decoder_epochs}
+  batch_size: ${pipeline.batch_size}
+  hidden_dim: ${pipeline.hidden_dim}
+  sig_depth: ${pipeline.sig_depth}
+  H: 0.1
+
+# JAX Integration Configuration
+jax:
+  config: "fractal.yaml"  # Will be dynamically generated
+  memory_fraction: 0.90
+
+# Sampling & Decoding Configuration
+sample:
+  n_samples: 100
+  seed: 999
+
+# Hydra Configuration
+hydra:
+  run:
+    dir: ./outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  job_logging:
+    version: 1
+    formatters:
+      simple:
+        format: '%(asctime)s %(levelname)s: %(message)s'
+        datefmt: '%H:%M:%S'
+    handlers:
+      console:
+        class: logging.StreamHandler
+        formatter: simple
+        stream: ext://sys.stdout
+    root:
+      level: INFO
+      handlers: [console]
+    disable_existing_loggers: false
