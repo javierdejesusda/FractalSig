@@ -9,7 +9,10 @@ from typing import Optional
 
 import numpy as np
 import torch
+import logging
 from fbm import FBM
+
+log = logging.getLogger(__name__)
 
 
 def generate_single_fbm(
@@ -101,8 +104,7 @@ def generate_rough_paths(
             paths[i, :, c] = path
 
     if used_cholesky:
-        print(f"Note: Using Cholesky method for H={H} "
-              "(Davies-Harte failed due to negative eigenvalues)")
+        log.warning(f"Note: Using Cholesky method for H={H} (Davies-Harte failed due to negative eigenvalues)")
 
     # Standardize per channel for neural network stability
     if standardize:

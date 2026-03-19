@@ -20,7 +20,6 @@ __pycache__/
 # Data and Artifacts (Local only)
 /data/
 /outputs/
-/results/
 /checkpoints/
 /model_checkpoints/
 
@@ -34,5 +33,10 @@ SigDiffusions/config/fractal.yaml
 *.npy
 *.pth
 *.pkl
-*.png
 *.backup_original*
+
+# Images (allow README figures)
+*.png
+!results/fractalsig_cover.png
+!results/master_figure.png
+!SigDiffusions/SigDiffusions_diagram.png

@@ -6,7 +6,7 @@
 ![JAX | PyTorch](https://img.shields.io/badge/backend-JAX%20%7C%20PyTorch-red.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
 
-**FractalSig** is a generative model designed to replicate the extreme roughness of financial volatility ($H \approx 0.1$). Unlike Fourier-based baselines that suffer from the **Gibbs Phenomenon** (smoothing and ringing artifacts), FractalSig uses a **Learned Besov-Wavelet Decoder** to hallucinate high-frequency details from latent signatures. The result is a **70x improvement** in increment variance capture compared to SOTA, enabling true-to-life simulation of rough market dynamics.
+**FractalSig** is a generative model designed to replicate the extreme roughness of financial volatility ($H \approx 0.1$). Unlike Fourier-based baselines that suffer from the **Gibbs Phenomenon** (smoothing and ringing artifacts), FractalSig uses a **Learned Besov-Wavelet Decoder** to hallucinate high-frequency details from latent signatures. The result is a **70x improvement** in increment variance capture compared to Sigdiffusion, enabling true-to-life simulation of rough market dynamics.
 
 
 ## The Problem vs. The Solution
@@ -133,7 +133,7 @@ If you prefer manual control, follow these steps:
    conda activate fractalsig
    ```
 
-2. **Install iisignature (Critical)**:
+2. **Install iisignature**:
    You **must** use `--no-build-isolation` to ensure the C++ extensions compile against your environment's numpy headers.
    ```bash
    pip install iisignature==0.24 --no-build-isolation
