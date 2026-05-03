@@ -73,9 +73,8 @@ def invert_signatures(config, name, logsigs=None):
         prev_dim = dim
         dim = 1
 
-    # convert logsignatures to signatures
-    # dim+3 is due to the augmentation
-    s = iisignature.prepare(dim + 3, sig_depth, "COSX2")
+    # Aligned with patched compute_signatures.py: time-only augmentation, no sin/cos.
+    s = iisignature.prepare(dim, sig_depth, "COSX2")
     sigs = iisignature.logsigtosig(logsigs, s)
 
     time_range = seq_len + 1

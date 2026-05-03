@@ -87,7 +87,7 @@ def take_log_signatures(
 
     data = augment_for_fourier_inversion(data, no, seq_len, dim, mirror_augmentation)
 
-    s = iisignature.prepare(dim, sig_depth)  # PATCHED: was dim + 3
+    s = iisignature.prepare(dim, sig_depth, "COSX2")
     logsigs = iisignature.logsig(data, s)
 
     logsigs = clip_quantiles(logsigs, 0.001, 0.999)
