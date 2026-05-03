@@ -8,4 +8,5 @@ from __future__ import annotations
 from fractalsig.datasets import (
     sp500_intraday,  # noqa: F401
     synthetic_fbm,  # noqa: F401
+    turbulence_burgers,  # noqa: F401
 )
