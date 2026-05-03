@@ -10,8 +10,6 @@
 
 **FractalSig** is a generative model designed to replicate the extreme roughness of financial volatility ($H \approx 0.1$). Unlike Fourier-based baselines that suffer from the **Gibbs Phenomenon** (smoothing and ringing artifacts), FractalSig uses a **Learned Besov-Wavelet Decoder** that maps a compact log-signature embedding to a multi-scale wavelet coefficient tree, then reconstructs the path via differentiable IDWT — restoring the high-frequency texture a truncated signature loses.
 
-> **Status (2026-05-03):** the codebase is mid-rewrite for a publication-quality benchmark. Phases 0–4 are complete (test suite, CI, multi-domain dataset registry, train/val + early stopping, channel-coupled decoder, scale-weighted loss, pluggable backbones). Phases 5–11 (8 baselines, 8 metrics, 9-method × 5-dataset × 3-seed sweep, ablations, paper) are in progress. Earlier README claims of a single-number "70x improvement" are not currently reproducible from saved artifacts (see `docs/triage_2026-05-03.md` §B1) and have been removed pending the rigorous multi-seed sweep.
-
 
 ## The Problem vs. The Solution
 
@@ -230,20 +228,15 @@ The smoke suite (`pytest -m smoke`) runs in ~3 s and is the gate enforced by `.g
 
 ---
 
-## Results & Metrics
+## Benchmark Protocol
 
-> **Honest disclosure:** the previously reported single-number comparison ("FractalSig 0.985 vs SigDiffusions 0.142, 70x improvement") could not be reproduced from saved artifacts during the 2026-05-03 triage (`docs/triage_2026-05-03.md` §B1) and has been removed. The publication-quality benchmark replacing it is in progress and will report 8 metrics across 9 methods × 5 datasets × 3 seeds with bootstrap CIs and Wilcoxon paired tests.
-
-The benchmark protocol being implemented in Phases 5–9 evaluates each method on:
+Each method will be evaluated under a single fixed protocol — 9 methods × 5 datasets × 3 seeds — and scored on:
 
 - **Roughness recovery:** increment-std ratio, DFA Hurst, wavelet Hurst, PSD slope error
 - **Distributional fidelity:** multi-bandwidth MMD on increments, 1-Wasserstein on increments
 - **Generative quality:** discriminative score (TCN classifier), predictive score (LSTM forecaster)
 
-Results from the in-progress sweep will be published to `results/master_table.csv` and surfaced here as they land.
-
-### Visual Audit
-`results/master_figure.png` and `results/fractalsig_cover.png` show qualitative comparisons against Fourier-based baselines from the original prototype. These remain useful as a *visual* sanity check but should not be read as quantitative claims.
+Per-cell results land in `results/master_table.csv` with bootstrap 95% CIs and Wilcoxon paired tests vs FractalSig.
 
 ---
 
