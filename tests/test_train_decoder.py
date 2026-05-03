@@ -78,6 +78,50 @@ def test_train_three_epochs_decreases_val_loss(tmp_path):
 
 
 @pytest.mark.smoke
+def test_train_with_scale_weighted_loss(tmp_path):
+    """`loss='scale_weighted'` runs end-to-end and produces finite val loss."""
+    out = train(
+        n_samples=32,
+        seq_len=32,
+        n_channels=1,
+        H=0.1,
+        sig_depth=2,
+        hidden_dim=16,
+        batch_size=8,
+        epochs=2,
+        lr=1e-3,
+        patience=10,
+        val_frac=0.25,
+        loss="scale_weighted",
+        loss_beta=1.0,
+        checkpoint_dir=str(tmp_path),
+        device="cpu",
+        seed=42,
+    )
+    assert out["best_val_loss"] != float("inf")
+    assert len(out["history"]["val_loss"]) == 2
+
+
+@pytest.mark.smoke
+def test_train_rejects_unknown_loss(tmp_path):
+    with pytest.raises(ValueError, match="loss"):
+        train(
+            n_samples=16,
+            seq_len=32,
+            sig_depth=2,
+            hidden_dim=8,
+            batch_size=4,
+            epochs=1,
+            patience=1,
+            val_frac=0.25,
+            loss="bogus",
+            checkpoint_dir=str(tmp_path),
+            device="cpu",
+            seed=0,
+        )
+
+
+@pytest.mark.smoke
 def test_train_early_stops_when_val_flat(tmp_path):
     """With lr=0 the val loss never improves; training should stop early."""
     out = train(

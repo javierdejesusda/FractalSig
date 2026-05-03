@@ -29,6 +29,7 @@ from tqdm import tqdm
 
 from fractalsig.data_gen import generate_rough_paths
 from fractalsig.decoder import FractalDecoder
+from fractalsig.losses import ScaleWeightedMSE
 
 log = logging.getLogger(__name__)
 
@@ -213,6 +214,46 @@ class RoughPathDataset(Dataset):
         log.info(f"Saved normalization stats to {filepath}")
 
 
+def _build_criterion(
+    *,
+    loss: str,
+    loss_beta: float,
+    seq_len: int,
+    n_channels: int,
+    wavelet: str,
+    level: int,
+) -> nn.Module:
+    """Construct the training criterion based on the ``loss`` flag.
+
+    Args:
+        loss: ``"mse"`` or ``"scale_weighted"``.
+        loss_beta: Beta forwarded to ``ScaleWeightedMSE``.
+        seq_len: Path length, used to derive coefficient layout.
+        n_channels: Number of channels per sample (concatenated in target).
+        wavelet: Wavelet family used by the dataset.
+        level: Wavelet decomposition level used by the dataset.
+
+    Returns:
+        An ``nn.Module`` whose forward returns a scalar loss.
+
+    Raises:
+        ValueError: If ``loss`` is not one of the supported values.
+    """
+    if loss == "mse":
+        return nn.MSELoss()
+    if loss == "scale_weighted":
+        coeff_lengths = [
+            int(c.shape[0])
+            for c in pywt.wavedec(np.zeros(seq_len), wavelet, level=level)
+        ]
+        return ScaleWeightedMSE(
+            coeff_lengths, beta=loss_beta, n_channels=n_channels
+        )
+    raise ValueError(
+        f"loss must be 'mse' or 'scale_weighted', got {loss!r}"
+    )
+
+
 def train(
     n_samples: int = 10000,
     seq_len: int = 256,
@@ -225,6 +266,8 @@ def train(
     lr: float = 1e-3,
     val_frac: float = 0.2,
     patience: int = 20,
+    loss: str = "mse",
+    loss_beta: float = 1.0,
     checkpoint_dir: str = "checkpoints",
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     seed: int | None = 42,
@@ -248,6 +291,10 @@ def train(
         lr: Peak learning rate for OneCycleLR.
         val_frac: Fraction of samples held out for validation.
         patience: Stop after this many epochs without val-loss improvement.
+        loss: ``"mse"`` for plain MSE or ``"scale_weighted"`` for
+            ``ScaleWeightedMSE`` with high-frequency emphasis.
+        loss_beta: Beta parameter passed to ``ScaleWeightedMSE`` (ignored
+            when ``loss="mse"``).
         checkpoint_dir: Directory for saving checkpoints.
         device: Training device.
         seed: Random seed.
@@ -335,7 +382,14 @@ def train(
     log.info(f"Input dim: {input_dim}, Output coeff dim: {model.total_coeff_dim}")
     log.info(f"Train/Val: {n_train}/{n_val} samples (val_frac={val_frac})")
 
-    criterion = nn.MSELoss()
+    criterion = _build_criterion(
+        loss=loss,
+        loss_beta=loss_beta,
+        seq_len=seq_len,
+        n_channels=n_channels,
+        wavelet=train_dataset.wavelet,
+        level=train_dataset.level,
+    ).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
@@ -366,13 +420,13 @@ def train(
 
             optimizer.zero_grad()
             pred_coeffs = model.mlp(logsig_batch)
-            loss = criterion(pred_coeffs, coeff_batch)
-            loss.backward()
+            step_loss = criterion(pred_coeffs, coeff_batch)
+            step_loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             scheduler.step()
 
-            epoch_loss += loss.item()
+            epoch_loss += step_loss.item()
             n_batches += 1
 
         avg_train_loss = epoch_loss / max(1, n_batches)
