@@ -36,15 +36,17 @@ log = logging.getLogger(__name__)
 class RoughPathDataset(Dataset):
     """Dataset of rough paths with pre-computed signatures and wavelet coefficients.
 
-    This dataset generates fBM paths and pre-computes:
+    Pre-computes:
     1. Log-Signatures: Compact geometric summaries (input to decoder)
     2. Wavelet Coefficients: Multi-scale decomposition (target for decoder)
 
-    Both inputs and targets are normalized to zero mean/unit variance for
-    stable training. The normalization statistics are saved for inference.
+    Both inputs and targets are normalized to zero mean/unit variance. When
+    `train_stats` is provided, normalization is applied with the supplied
+    statistics instead of recomputing — this is how val/test splits stay on
+    the same scale as the training split.
 
     Attributes:
-        paths: Generated fBM paths (n_samples, seq_len, n_channels).
+        paths: Input paths of shape (n_samples, seq_len, n_channels).
         log_signatures: Pre-computed log-signatures (n_samples, logsig_dim).
         wavelet_coeffs: Flattened wavelet coefficients (n_samples, coeff_dim).
         logsig_stats: Dict with 'mean' and 'std' for log-signatures.
@@ -53,55 +55,41 @@ class RoughPathDataset(Dataset):
 
     def __init__(
         self,
-        n_samples: int,
-        seq_len: int,
-        n_channels: int = 1,
-        H: float = 0.1,
+        paths: torch.Tensor,
         sig_depth: int = 4,
         wavelet: str = "db4",
         level: int | None = None,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu",
-        seed: int | None = None,
+        train_stats: dict[str, dict[str, torch.Tensor]] | None = None,
     ) -> None:
-        """Initialize the dataset.
+        """Initialize the dataset from a tensor of paths.
 
         Args:
-            n_samples: Number of paths to generate.
-            seq_len: Length of each path.
-            n_channels: Number of channels per path.
-            H: Hurst parameter for fBM generation.
+            paths: Tensor of shape (n_samples, seq_len, n_channels).
             sig_depth: Depth of log-signature computation.
             wavelet: Wavelet family for decomposition.
             level: Wavelet decomposition level (auto if None).
-            device: Device for signature computation.
-            seed: Random seed for reproducibility.
+            train_stats: Optional dict with keys 'logsig' and 'coeff', each a
+                stats dict with 'mean' and 'std'. When provided, the dataset
+                is normalized with these stats instead of recomputing — used
+                to keep val/test on the train split's scale.
         """
         super().__init__()
 
-        self.n_samples = n_samples
-        self.seq_len = seq_len
-        self.n_channels = n_channels
+        self.paths = paths
+        self.n_samples, self.seq_len, self.n_channels = (
+            int(paths.shape[0]),
+            int(paths.shape[1]),
+            int(paths.shape[2]),
+        )
         self.sig_depth = sig_depth
         self.wavelet = wavelet
-        self.device = device
 
-        # Determine wavelet level
         if level is None:
             wavelet_obj = pywt.Wavelet(wavelet)
-            max_level = pywt.dwt_max_level(seq_len, wavelet_obj.dec_len)
+            max_level = pywt.dwt_max_level(self.seq_len, wavelet_obj.dec_len)
             self.level = max(1, min(max_level, 6))
         else:
             self.level = level
-
-        log.info(f"Generating {n_samples} rough paths (H={H}, seq_len={seq_len})...")
-        self.paths = generate_rough_paths(
-            n_paths=n_samples,
-            seq_len=seq_len,
-            n_channels=n_channels,
-            H=H,
-            seed=seed,
-            standardize=True,
-        )
 
         log.info("Pre-computing log-signatures...")
         self.log_signatures = self._compute_log_signatures()
@@ -109,10 +97,15 @@ class RoughPathDataset(Dataset):
         log.info("Pre-computing wavelet coefficients...")
         self.wavelet_coeffs = self._compute_wavelet_coeffs()
 
-        # Normalize inputs and targets
         log.info("Normalizing data...")
-        self.log_signatures, self.logsig_stats = self._normalize(self.log_signatures)
-        self.wavelet_coeffs, self.coeff_stats = self._normalize(self.wavelet_coeffs)
+        if train_stats is None:
+            self.log_signatures, self.logsig_stats = self._normalize(self.log_signatures)
+            self.wavelet_coeffs, self.coeff_stats = self._normalize(self.wavelet_coeffs)
+        else:
+            self.logsig_stats = train_stats["logsig"]
+            self.coeff_stats = train_stats["coeff"]
+            self.log_signatures = self._apply_stats(self.log_signatures, self.logsig_stats)
+            self.wavelet_coeffs = self._apply_stats(self.wavelet_coeffs, self.coeff_stats)
 
         log.info(f"Dataset ready: logsig_dim={self.log_signatures.shape[1]}, "
               f"coeff_dim={self.wavelet_coeffs.shape[1]}")
@@ -177,12 +170,22 @@ class RoughPathDataset(Dataset):
         """
         mean = tensor.mean(dim=0, keepdim=True)
         std = tensor.std(dim=0, keepdim=True)
-        std = torch.clamp(std, min=1e-8)  # Avoid division by zero
+        std = torch.clamp(std, min=1e-8)
 
         normalized = (tensor - mean) / std
 
         stats = {"mean": mean.squeeze(0), "std": std.squeeze(0)}
         return normalized, stats
+
+    @staticmethod
+    def _apply_stats(
+        tensor: torch.Tensor,
+        stats: dict[str, torch.Tensor],
+    ) -> torch.Tensor:
+        """Apply pre-computed normalization stats to a tensor."""
+        mean = stats["mean"].unsqueeze(0)
+        std = torch.clamp(stats["std"].unsqueeze(0), min=1e-8)
+        return (tensor - mean) / std
 
     def __len__(self) -> int:
         return self.n_samples
@@ -220,113 +223,150 @@ def train(
     batch_size: int = 64,
     epochs: int = 100,
     lr: float = 1e-3,
+    val_frac: float = 0.2,
+    patience: int = 20,
     checkpoint_dir: str = "checkpoints",
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
     seed: int | None = 42,
-) -> dict[str, float]:
+) -> dict[str, object]:
     """Train the FractalDecoder on ground-truth fBM data.
 
+    Generates `n_samples` rough paths once, splits them into train/val,
+    pre-computes signatures and wavelet coefficients on each split, and
+    trains the decoder. The best checkpoint is selected by validation
+    loss; training stops early after `patience` epochs without improvement.
+
     Args:
-        n_samples: Number of training samples.
+        n_samples: Total number of paths (split into train/val).
         seq_len: Sequence length.
         n_channels: Number of channels.
         H: Hurst parameter.
         sig_depth: Log-signature depth.
         hidden_dim: Decoder hidden dimension.
         batch_size: Training batch size.
-        epochs: Number of training epochs.
-        lr: Learning rate.
+        epochs: Maximum number of training epochs.
+        lr: Peak learning rate for OneCycleLR.
+        val_frac: Fraction of samples held out for validation.
+        patience: Stop after this many epochs without val-loss improvement.
         checkpoint_dir: Directory for saving checkpoints.
         device: Training device.
         seed: Random seed.
 
     Returns:
-        Dict with training metrics (final loss, best loss).
+        Dict with keys: best_val_loss, final_train_loss, epochs_trained,
+        history (dict of train_loss / val_loss lists).
     """
     if seed is not None:
         torch.manual_seed(seed)
         np.random.seed(seed)
 
-    # Create checkpoint directory
     checkpoint_path = Path(checkpoint_dir)
     checkpoint_path.mkdir(parents=True, exist_ok=True)
 
-    # Create dataset
-    dataset = RoughPathDataset(
-        n_samples=n_samples,
+    if not 0.0 < val_frac < 1.0:
+        raise ValueError(f"val_frac must be in (0, 1), got {val_frac}")
+
+    log.info(f"Generating {n_samples} rough paths (H={H}, seq_len={seq_len})...")
+    all_paths = generate_rough_paths(
+        n_paths=n_samples,
         seq_len=seq_len,
         n_channels=n_channels,
         H=H,
-        sig_depth=sig_depth,
-        device=device,
         seed=seed,
+        standardize=True,
     )
 
-    # Save normalization stats
-    stats_path = checkpoint_path / "normalization_stats.json"
-    dataset.save_stats(str(stats_path))
+    n_val = max(1, int(round(n_samples * val_frac)))
+    n_train = n_samples - n_val
+    if n_train < 1:
+        raise ValueError(
+            f"val_frac={val_frac} leaves no training samples (n_samples={n_samples})"
+        )
+    perm = torch.randperm(n_samples, generator=torch.Generator().manual_seed(seed or 0))
+    train_idx, val_idx = perm[:n_train], perm[n_train:]
+    train_paths = all_paths[train_idx]
+    val_paths = all_paths[val_idx]
 
-    # Create dataloader
-    dataloader = DataLoader(
-        dataset,
+    train_dataset = RoughPathDataset(
+        paths=train_paths,
+        sig_depth=sig_depth,
+    )
+    val_dataset = RoughPathDataset(
+        paths=val_paths,
+        sig_depth=sig_depth,
+        wavelet=train_dataset.wavelet,
+        level=train_dataset.level,
+        train_stats={
+            "logsig": train_dataset.logsig_stats,
+            "coeff": train_dataset.coeff_stats,
+        },
+    )
+
+    stats_path = checkpoint_path / "normalization_stats.json"
+    train_dataset.save_stats(str(stats_path))
+
+    pin = device == "cuda"
+    train_loader = DataLoader(
+        train_dataset,
         batch_size=batch_size,
         shuffle=True,
         num_workers=0,
-        pin_memory=True if device == "cuda" else False,
+        pin_memory=pin,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=0,
+        pin_memory=pin,
     )
 
-    # Initialize model
-    input_dim = dataset.log_signatures.shape[1]
+    input_dim = train_dataset.log_signatures.shape[1]
     model = FractalDecoder(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
         output_seq_len=seq_len,
         out_channels=n_channels,
-        wavelet=dataset.wavelet,
-        level=dataset.level,
+        wavelet=train_dataset.wavelet,
+        level=train_dataset.level,
     ).to(device)
 
     log.info(f"\nModel: {model.get_num_params():,} parameters")
     log.info(f"Input dim: {input_dim}, Output coeff dim: {model.total_coeff_dim}")
+    log.info(f"Train/Val: {n_train}/{n_val} samples (val_frac={val_frac})")
 
-    # Loss and optimizer
     criterion = nn.MSELoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-5)
-
-    # OneCycleLR scheduler
     scheduler = torch.optim.lr_scheduler.OneCycleLR(
         optimizer,
         max_lr=lr,
         epochs=epochs,
-        steps_per_epoch=len(dataloader),
+        steps_per_epoch=max(1, len(train_loader)),
         pct_start=0.3,
     )
 
-    # Training loop
-    best_loss = float("inf")
-    history: dict[str, list[float]] = {"train_loss": []}
+    best_val_loss = float("inf")
+    epochs_no_improve = 0
+    avg_train_loss = float("nan")
+    history: dict[str, list[float]] = {"train_loss": [], "val_loss": []}
 
-    log.info(f"Starting training for {epochs} epochs...")
+    log.info(f"Starting training for up to {epochs} epochs (patience={patience})...")
 
     pbar = tqdm(range(epochs), desc="Training", unit="epoch")
+    last_epoch = -1
     for epoch in pbar:
+        last_epoch = epoch
         model.train()
         epoch_loss = 0.0
         n_batches = 0
 
-        for logsig_batch, coeff_batch in dataloader:
+        for logsig_batch, coeff_batch in train_loader:
             logsig_batch = logsig_batch.to(device)
             coeff_batch = coeff_batch.to(device)
 
             optimizer.zero_grad()
-
-            # Forward: predict wavelet coefficients directly
-            # We need to get the MLP output before waverec
             pred_coeffs = model.mlp(logsig_batch)
-
-            # Loss on coefficient space
             loss = criterion(pred_coeffs, coeff_batch)
-
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
@@ -335,52 +375,71 @@ def train(
             epoch_loss += loss.item()
             n_batches += 1
 
-        avg_loss = epoch_loss / n_batches
-        history["train_loss"].append(avg_loss)
+        avg_train_loss = epoch_loss / max(1, n_batches)
+        history["train_loss"].append(avg_train_loss)
 
-        # Update progress bar
+        model.eval()
+        val_loss_total = 0.0
+        val_batches = 0
+        with torch.no_grad():
+            for logsig_batch, coeff_batch in val_loader:
+                logsig_batch = logsig_batch.to(device)
+                coeff_batch = coeff_batch.to(device)
+                pred_coeffs = model.mlp(logsig_batch)
+                val_loss_total += criterion(pred_coeffs, coeff_batch).item()
+                val_batches += 1
+        avg_val_loss = val_loss_total / max(1, val_batches)
+        history["val_loss"].append(avg_val_loss)
+
         current_lr = scheduler.get_last_lr()[0]
         pbar.set_postfix({
-            "Loss": f"{avg_loss:.5f}",
+            "Train": f"{avg_train_loss:.5f}",
+            "Val": f"{avg_val_loss:.5f}",
+            "Best": f"{best_val_loss:.5f}",
             "LR": f"{current_lr:.2e}",
-            "Best": f"{best_loss:.5f}"
         })
 
-        # Save best model
-        if avg_loss < best_loss:
-            best_loss = avg_loss
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            epochs_no_improve = 0
             torch.save(
                 {
                     "epoch": epoch,
                     "model_state_dict": model.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict(),
-                    "loss": best_loss,
+                    "val_loss": best_val_loss,
+                    "train_loss": avg_train_loss,
                     "config": {
                         "input_dim": input_dim,
                         "hidden_dim": hidden_dim,
                         "seq_len": seq_len,
                         "n_channels": n_channels,
-                        "wavelet": dataset.wavelet,
-                        "level": dataset.level,
+                        "wavelet": train_dataset.wavelet,
+                        "level": train_dataset.level,
                     },
                 },
                 checkpoint_path / "fractal_decoder_best.pth",
             )
-            # Only log detailed info occasionally to avoid spam
-            if (epoch + 1) % 50 == 0:
-                 log.debug(f"New best model saved at epoch {epoch+1} (Loss: {best_loss:.6f})")
+        else:
+            epochs_no_improve += 1
+            if epochs_no_improve >= patience:
+                log.info(
+                    f"Early stopping at epoch {epoch+1} "
+                    f"(no val improvement for {patience} epochs)"
+                )
+                break
 
-    log.info(f"Training complete. Best loss: {best_loss:.6f}")
+    log.info(f"Training complete. Best val loss: {best_val_loss:.6f}")
     log.info(f"Model saved to: {checkpoint_path / 'fractal_decoder_best.pth'}")
 
-    # Clear GPU memory
     if device == "cuda":
         torch.cuda.empty_cache()
 
     return {
-        "final_loss": avg_loss,
-        "best_loss": best_loss,
-        "epochs_trained": epochs,
+        "final_train_loss": avg_train_loss,
+        "best_val_loss": best_val_loss,
+        "epochs_trained": last_epoch + 1,
+        "history": history,
     }
 
 
