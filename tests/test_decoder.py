@@ -50,3 +50,39 @@ def test_extra_repr_contains_key_fields():
     s = m.extra_repr()
     for key in ("input_dim", "hidden_dim", "output_seq_len", "wavelet"):
         assert key in s
+
+
+@pytest.mark.smoke
+def test_multichannel_forward():
+    """Multi-channel outputs must differ across channels for random input.
+
+    The MLP head produces all channels in a single forward pass, then the
+    per-channel slices feed independent IDWTs. With distinct slices the
+    reconstructed channels must not collapse onto each other.
+    """
+    m = FractalDecoder(
+        input_dim=8, hidden_dim=16, output_seq_len=64, out_channels=2, level=2
+    )
+    m.train(False)
+    x = torch.randn(4, 8)
+    y = m(x)
+    assert y.shape == (4, 64, 2)
+    diff = (y[..., 0] - y[..., 1]).abs().max().item()
+    assert diff > 1e-5, "multi-channel decoder collapsed channels onto each other"
+
+
+@pytest.mark.smoke
+def test_multichannel_single_mlp_forward():
+    """The MLP runs exactly once per forward, regardless of channel count."""
+    m = FractalDecoder(
+        input_dim=8, hidden_dim=16, output_seq_len=64, out_channels=3, level=2
+    )
+    calls = {"n": 0}
+
+    def _count(_module, _inputs):
+        calls["n"] += 1
+
+    m.mlp.register_forward_pre_hook(_count)
+    m.train(False)
+    m(torch.randn(2, 8))
+    assert calls["n"] == 1, f"MLP ran {calls['n']} times for 3 channels (expected 1)"

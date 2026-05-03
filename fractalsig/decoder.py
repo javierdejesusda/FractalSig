@@ -200,6 +200,11 @@ class FractalDecoder(nn.Module):
     def forward(self, log_signature: torch.Tensor) -> torch.Tensor:
         """Forward pass: Log-Signature → Reconstructed Path.
 
+        The MLP runs once and projects to all channels jointly. Its output
+        is reshaped to (batch, out_channels, total_coeff_dim_per_channel)
+        so the linear head can learn cross-channel correlations rather than
+        treating channels as independent slices of an unstructured vector.
+
         Args:
             log_signature: Input tensor of shape (batch, input_dim) containing
                 the log-signature embeddings.
@@ -208,38 +213,22 @@ class FractalDecoder(nn.Module):
             Reconstructed paths of shape (batch, output_seq_len, out_channels).
         """
         wavelet = pywt.Wavelet(self.wavelet)
+        batch_size = log_signature.shape[0]
+
+        full_output = self.mlp(log_signature)
+        per_channel = full_output.view(
+            batch_size, self.out_channels, self.total_coeff_dim_per_channel
+        )
 
         outputs = []
-
         for c in range(self.out_channels):
-            # MLP: signature → flat wavelet coefficients
-            # For multi-channel, we can either share MLP or use channel offset
-            # Here we use the same MLP but different slices of output
-            if self.out_channels == 1:
-                flat_coeffs = self.mlp(log_signature)
-            else:
-                # Full output, then slice per channel
-                full_output = self.mlp(log_signature)
-                start = c * self.total_coeff_dim_per_channel
-                end = (c + 1) * self.total_coeff_dim_per_channel
-                flat_coeffs = full_output[:, start:end]
-
-            # Unflatten to wavelet coefficient structure
+            flat_coeffs = per_channel[:, c, :]
             coeffs = self._unflatten_coefficients(flat_coeffs)
-
-            # Differentiable wavelet reconstruction via ptwt
-            # ptwt.waverec expects coeffs as list: [cA, cD_n, ..., cD_1]
             reconstructed = ptwt.waverec(coeffs, wavelet)
-
-            # Crop to exact output length (IDWT can add padding)
             reconstructed = reconstructed[:, :self.output_seq_len]
-
             outputs.append(reconstructed)
 
-        # Stack channels: (batch, seq_len, channels)
-        output = torch.stack(outputs, dim=-1)
-
-        return output
+        return torch.stack(outputs, dim=-1)
 
     def get_num_params(self, trainable_only: bool = True) -> int:
         """Count the number of parameters in the model.
