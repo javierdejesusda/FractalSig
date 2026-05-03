@@ -72,6 +72,58 @@ def test_multichannel_forward():
 
 
 @pytest.mark.smoke
+@pytest.mark.parametrize("arch", ["mlp", "mlp_attn", "transformer"])
+def test_decoder_arch_forward_shape(arch):
+    m = FractalDecoder(
+        input_dim=8, hidden_dim=16, output_seq_len=64, out_channels=1,
+        level=2, arch=arch,
+    )
+    m.train(False)
+    y = m(torch.randn(3, 8))
+    assert y.shape == (3, 64, 1)
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize("arch", ["mlp", "mlp_attn", "transformer"])
+def test_decoder_arch_gradients_flow(arch):
+    m = FractalDecoder(
+        input_dim=8, hidden_dim=16, output_seq_len=64, out_channels=1,
+        level=2, arch=arch,
+    )
+    m(torch.randn(2, 8)).sum().backward()
+    grads_ok = all(
+        p.grad is not None and p.grad.abs().sum() > 0
+        for p in m.parameters() if p.requires_grad
+    )
+    assert grads_ok, f"gradients did not flow through arch={arch!r}"
+
+
+@pytest.mark.smoke
+def test_unknown_arch_rejected():
+    with pytest.raises(ValueError, match="arch"):
+        FractalDecoder(
+            input_dim=8, hidden_dim=16, output_seq_len=64, level=2, arch="bogus",
+        )
+
+
+@pytest.mark.smoke
+def test_default_arch_is_mlp():
+    m = FractalDecoder(input_dim=8, hidden_dim=16, output_seq_len=64, level=2)
+    assert m.arch == "mlp"
+
+
+@pytest.mark.smoke
+def test_transformer_within_param_budget():
+    """Transformer backbone stays within 4x the MLP backbone param count."""
+    common = dict(
+        input_dim=8, hidden_dim=16, output_seq_len=64, out_channels=1, level=2,
+    )
+    mlp = FractalDecoder(arch="mlp", **common)  # type: ignore[arg-type]
+    transformer = FractalDecoder(arch="transformer", **common)  # type: ignore[arg-type]
+    assert transformer.get_num_params() <= 4 * mlp.get_num_params()
+
+
+@pytest.mark.smoke
 def test_multichannel_single_mlp_forward():
     """The MLP runs exactly once per forward, regardless of channel count."""
     m = FractalDecoder(

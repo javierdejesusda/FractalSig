@@ -27,6 +27,108 @@ import torch
 import torch.nn as nn
 
 
+def _safe_n_heads(hidden_dim: int, preferred: int) -> int:
+    """Pick the largest n_heads up to ``preferred`` that divides ``hidden_dim``."""
+    for h in range(min(preferred, hidden_dim), 0, -1):
+        if hidden_dim % h == 0:
+            return h
+    return 1
+
+
+class _MLPAttnBackbone(nn.Module):
+    """MLP head with one self-attention block over projected token groups.
+
+    The input vector is projected to a small bag of ``n_tokens`` tokens of
+    width ``hidden_dim``, attended over once, then flattened and projected
+    to the flat coefficient vector. This adds explicit cross-scale mixing
+    without ballooning parameters.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        n_layers: int,
+        dropout: float,
+        n_tokens: int = 4,
+    ) -> None:
+        super().__init__()
+        n_heads = _safe_n_heads(hidden_dim, preferred=4)
+        self.n_tokens = n_tokens
+        self.token_dim = hidden_dim
+
+        in_layers: list[nn.Module] = [
+            nn.Linear(input_dim, hidden_dim),
+            nn.GELU(),
+            nn.LayerNorm(hidden_dim),
+            nn.Dropout(dropout),
+        ]
+        for _ in range(max(0, n_layers - 3)):
+            in_layers += [
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.GELU(),
+                nn.LayerNorm(hidden_dim),
+                nn.Dropout(dropout),
+            ]
+        self.in_proj = nn.Sequential(*in_layers)
+        self.tokenize = nn.Linear(hidden_dim, n_tokens * hidden_dim)
+        self.attn = nn.MultiheadAttention(
+            embed_dim=hidden_dim,
+            num_heads=n_heads,
+            dropout=dropout,
+            batch_first=True,
+        )
+        self.norm = nn.LayerNorm(hidden_dim)
+        self.out_proj = nn.Linear(n_tokens * hidden_dim, output_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        h = self.in_proj(x)
+        tok = self.tokenize(h).view(-1, self.n_tokens, self.token_dim)
+        attn_out, _ = self.attn(tok, tok, tok, need_weights=False)
+        h2 = self.norm(tok + attn_out)
+        return self.out_proj(h2.flatten(1))
+
+
+class _TransformerBackbone(nn.Module):
+    """Single TransformerEncoder layer over projected token groups.
+
+    Sized to stay within roughly 4x the MLP backbone's parameter budget at
+    typical settings: one encoder layer, ``dim_feedforward = hidden_dim``,
+    and ``n_tokens = 4`` projected tokens.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        dropout: float,
+        n_tokens: int = 4,
+    ) -> None:
+        super().__init__()
+        n_heads = _safe_n_heads(hidden_dim, preferred=2)
+        self.n_tokens = n_tokens
+        self.token_dim = hidden_dim
+        self.tokenize = nn.Linear(input_dim, n_tokens * hidden_dim)
+        self.pos = nn.Parameter(torch.randn(1, n_tokens, hidden_dim) * 0.02)
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_dim,
+            nhead=n_heads,
+            dim_feedforward=hidden_dim,
+            dropout=dropout,
+            batch_first=True,
+            activation="gelu",
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=1)
+        self.out_proj = nn.Linear(n_tokens * hidden_dim, output_dim)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        tok = self.tokenize(x).view(-1, self.n_tokens, self.token_dim) + self.pos
+        h = self.encoder(tok)
+        return self.out_proj(h.flatten(1))
+
+
 class FractalDecoder(nn.Module):
     """Learned decoder mapping Log-Signatures to Wavelet coefficient trees.
 
@@ -57,6 +159,8 @@ class FractalDecoder(nn.Module):
         torch.Size([32, 256, 1])
     """
 
+    SUPPORTED_ARCHS = ("mlp", "mlp_attn", "transformer")
+
     def __init__(
         self,
         input_dim: int,
@@ -67,12 +171,13 @@ class FractalDecoder(nn.Module):
         level: int | None = None,
         n_layers: int = 4,
         dropout: float = 0.1,
+        arch: str = "mlp",
     ) -> None:
         """Initialize the FractalDecoder.
 
         Args:
             input_dim: Dimension of the input log-signature vector.
-            hidden_dim: Hidden dimension for MLP backbone layers.
+            hidden_dim: Hidden dimension for backbone layers.
             output_seq_len: Target length of reconstructed sequences.
             out_channels: Number of output channels (default: 1).
             wavelet: Wavelet family to use (default: 'db4' - Daubechies 4).
@@ -80,8 +185,24 @@ class FractalDecoder(nn.Module):
                 based on sequence length.
             n_layers: Number of MLP layers (default: 4 for sufficient non-linearity).
             dropout: Dropout rate for regularization (default: 0.1).
+            arch: Backbone variant — ``"mlp"`` (default), ``"mlp_attn"``
+                (MLP plus one self-attention block over projected token
+                groups), or ``"transformer"`` (single TransformerEncoder
+                layer over projected tokens). All variants expose the same
+                ``(input_dim,) -> (total_coeff_dim,)`` interface as ``self.mlp``
+                so the rest of the pipeline is unchanged. The transformer
+                variant is sized to stay within roughly 4x the MLP
+                backbone's parameter budget for fair ablation.
+
+        Raises:
+            ValueError: If ``arch`` is not one of ``SUPPORTED_ARCHS``.
         """
         super().__init__()
+
+        if arch not in self.SUPPORTED_ARCHS:
+            raise ValueError(
+                f"arch must be one of {self.SUPPORTED_ARCHS}, got {arch!r}"
+            )
 
         self.input_dim = input_dim
         self.hidden_dim = hidden_dim
@@ -89,21 +210,18 @@ class FractalDecoder(nn.Module):
         self.out_channels = out_channels
         self.wavelet = wavelet
         self.n_layers = n_layers
+        self.arch = arch
 
-        # Compute decomposition level if not specified
         if level is None:
-            # Maximum level based on sequence length and wavelet filter length
             wavelet_obj = pywt.Wavelet(wavelet)
             max_level = pywt.dwt_max_level(output_seq_len, wavelet_obj.dec_len)
-            self.level = max(1, min(max_level, 6))  # Cap at 6 for stability
+            self.level = max(1, min(max_level, 6))
         else:
             self.level = level
 
-        # Shape inference: determine coefficient structure via dummy decomposition
         self._infer_coefficient_shapes()
 
-        # Build MLP backbone (the "hallucination engine")
-        self.mlp = self._build_mlp(dropout)
+        self.mlp = self._build_backbone(arch, dropout)
 
     def _infer_coefficient_shapes(self) -> None:
         """Infer wavelet coefficient shapes via dummy decomposition.
@@ -138,13 +256,38 @@ class FractalDecoder(nn.Module):
             torch.tensor([s[0] for s in self.coeff_shapes], dtype=torch.long)
         )
 
+    def _build_backbone(self, arch: str, dropout: float) -> nn.Module:
+        """Build the chosen backbone mapping ``input_dim`` to ``total_coeff_dim``.
+
+        Args:
+            arch: One of ``"mlp"``, ``"mlp_attn"``, ``"transformer"``.
+            dropout: Dropout rate forwarded to all sub-modules.
+
+        Returns:
+            ``nn.Module`` whose forward maps ``(B, input_dim)`` to
+            ``(B, total_coeff_dim)``.
+        """
+        if arch == "mlp":
+            return self._build_mlp(dropout)
+        if arch == "mlp_attn":
+            return _MLPAttnBackbone(
+                input_dim=self.input_dim,
+                hidden_dim=self.hidden_dim,
+                output_dim=self.total_coeff_dim,
+                n_layers=self.n_layers,
+                dropout=dropout,
+            )
+        if arch == "transformer":
+            return _TransformerBackbone(
+                input_dim=self.input_dim,
+                hidden_dim=self.hidden_dim,
+                output_dim=self.total_coeff_dim,
+                dropout=dropout,
+            )
+        raise ValueError(f"unknown arch {arch!r}")
+
     def _build_mlp(self, dropout: float) -> nn.Sequential:
         """Build the MLP backbone for learning Signature → Wavelet mapping.
-
-        Architecture uses GELU activation (smooth, good for generation tasks)
-        and LayerNorm for training stability. Multiple layers allow the network
-        to learn the complex non-linear mapping from geometric summaries
-        (signatures) to multi-scale textures (wavelets).
 
         Args:
             dropout: Dropout rate for regularization.
@@ -154,20 +297,17 @@ class FractalDecoder(nn.Module):
         """
         layers: list[nn.Module] = []
 
-        # Input layer
         layers.append(nn.Linear(self.input_dim, self.hidden_dim))
         layers.append(nn.GELU())
         layers.append(nn.LayerNorm(self.hidden_dim))
         layers.append(nn.Dropout(dropout))
 
-        # Hidden layers
         for _ in range(self.n_layers - 2):
             layers.append(nn.Linear(self.hidden_dim, self.hidden_dim))
             layers.append(nn.GELU())
             layers.append(nn.LayerNorm(self.hidden_dim))
             layers.append(nn.Dropout(dropout))
 
-        # Output layer: project to total coefficient dimension
         layers.append(nn.Linear(self.hidden_dim, self.total_coeff_dim))
 
         return nn.Sequential(*layers)
