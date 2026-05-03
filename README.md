@@ -2,11 +2,15 @@
 
 # FractalSig: Breaking the Smoothness Barrier in Rough Volatility
 
-![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![JAX | PyTorch](https://img.shields.io/badge/backend-JAX%20%7C%20PyTorch-red.svg)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
+![PyTorch](https://img.shields.io/badge/PyTorch-2.5-red.svg)
+![JAX (submodule)](https://img.shields.io/badge/JAX-submodule-orange.svg)
 ![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![CI](https://github.com/javierdejesusda/FractalSig/actions/workflows/ci.yml/badge.svg)
 
-**FractalSig** is a generative model designed to replicate the extreme roughness of financial volatility ($H \approx 0.1$). Unlike Fourier-based baselines that suffer from the **Gibbs Phenomenon** (smoothing and ringing artifacts), FractalSig uses a **Learned Besov-Wavelet Decoder** to hallucinate high-frequency details from latent signatures. The result is a **70x improvement** in increment variance capture compared to Sigdiffusion, enabling true-to-life simulation of rough market dynamics.
+**FractalSig** is a generative model designed to replicate the extreme roughness of financial volatility ($H \approx 0.1$). Unlike Fourier-based baselines that suffer from the **Gibbs Phenomenon** (smoothing and ringing artifacts), FractalSig uses a **Learned Besov-Wavelet Decoder** that maps a compact log-signature embedding to a multi-scale wavelet coefficient tree, then reconstructs the path via differentiable IDWT — restoring the high-frequency texture a truncated signature loses.
+
+> **Status (2026-05-03):** the codebase is mid-rewrite for a publication-quality benchmark. Phases 0–4 are complete (test suite, CI, multi-domain dataset registry, train/val + early stopping, channel-coupled decoder, scale-weighted loss, pluggable backbones). Phases 5–11 (8 baselines, 8 metrics, 9-method × 5-dataset × 3-seed sweep, ablations, paper) are in progress. Earlier README claims of a single-number "70x improvement" are not currently reproducible from saved artifacts (see `docs/triage_2026-05-03.md` §B1) and have been removed pending the rigorous multi-seed sweep.
 
 
 ## The Problem vs. The Solution
@@ -178,22 +182,68 @@ You can run individual steps of the pipeline using the `mode` argument:
 | `train_jax` | Trains the JAX Signature Diffusion model. |
 | `sample` | Generates signatures with JAX and decodes them to paths with PyTorch. |
 
+### Decoder training options (Phase 4)
+
+`fractalsig.train_decoder.train(...)` and the underlying `FractalDecoder` now expose:
+
+| Option | Values | Effect |
+| :--- | :--- | :--- |
+| `val_frac` | float in `(0, 1)` (default `0.2`) | Held-out validation fraction; best checkpoint is selected by val loss. |
+| `patience` | int (default `20`) | Early-stop after this many epochs without val-loss improvement. |
+| `loss` | `"mse"` \| `"scale_weighted"` | Plain MSE or per-scale-weighted MSE that emphasizes high-frequency wavelet bands (`fractalsig/losses.py`). |
+| `loss_beta` | float (default `1.0`) | Strength of high-frequency emphasis when `loss="scale_weighted"`. |
+| `arch` (decoder) | `"mlp"` \| `"mlp_attn"` \| `"transformer"` | Pluggable backbone for ablations; transformer variant is sized to stay within ~4x the MLP parameter budget. |
+
+---
+
+## Datasets
+
+All datasets are exposed through the `DATASETS` registry in `fractalsig/registries.py` and follow a common `SignalDataset` interface (windowed slices + train/val/test split):
+
+| Name | Domain | Source | Module |
+| :--- | :--- | :--- | :--- |
+| `synthetic_fbm` | Reference rough paths | Davies–Harte fBM with configurable $H$ | `fractalsig/datasets/synthetic_fbm.py` |
+| `sp500_intraday` | Rough volatility surrogate | Rough Bergomi simulator (Bayer/Friz/Gatheral 2016) | `fractalsig/datasets/sp500_intraday.py` |
+| `turbulence_burgers` | Multifractal turbulence | Stochastic Burgers (multifractal $H \approx 1/3$) | `fractalsig/datasets/turbulence_burgers.py` |
+| `eeg_chbmit` | Biomedical | CHB-MIT scalp-EEG single-channel windows | `fractalsig/datasets/eeg_chbmit.py` |
+| `audio_esc50` | Environmental audio | ESC-50 mono at 8 kHz | `fractalsig/datasets/audio_esc50.py` |
+
+> The `sp500_intraday` slot is currently a rough-Bergomi *simulator* rather than empirical SPX intraday data — yfinance/Stooq/FRED were unreachable from the target environment. Documented in the module docstring; full empirical ingestion remains future work.
+
+Build all caches in one shot with:
+
+```bash
+python scripts/download_datasets.py
+```
+
+---
+
+## Testing
+
+```bash
+ruff check fractalsig tests
+mypy fractalsig --ignore-missing-imports
+pytest -m smoke -q
+```
+
+The smoke suite (`pytest -m smoke`) runs in ~3 s and is the gate enforced by `.github/workflows/ci.yml` on every push/PR to `main`.
+
 ---
 
 ## Results & Metrics
 
-We evaluate generation quality using the **Increment Standard Deviation** (a proxy for roughness) and visual fidelity.
+> **Honest disclosure:** the previously reported single-number comparison ("FractalSig 0.985 vs SigDiffusions 0.142, 70x improvement") could not be reproduced from saved artifacts during the 2026-05-03 triage (`docs/triage_2026-05-03.md` §B1) and has been removed. The publication-quality benchmark replacing it is in progress and will report 8 metrics across 9 methods × 5 datasets × 3 seeds with bootstrap CIs and Wilcoxon paired tests.
 
-| Model | Metric: Increment Std ($H=0.1$) | Rel. Error |
-| :--- | :--- | :--- |
-| **Ground Truth** | **1.000** | - |
-| SigDiffusions (Baseline) | 0.142 | -85% |
-| **FractalSig (Ours)** | **0.985** | **-1.5%** |
+The benchmark protocol being implemented in Phases 5–9 evaluates each method on:
 
-*Note: Baselines produce overly smooth paths. FractalSig captures 98.5% of the high-frequency variance.*
+- **Roughness recovery:** increment-std ratio, DFA Hurst, wavelet Hurst, PSD slope error
+- **Distributional fidelity:** multi-bandwidth MMD on increments, 1-Wasserstein on increments
+- **Generative quality:** discriminative score (TCN classifier), predictive score (LSTM forecaster)
+
+Results from the in-progress sweep will be published to `results/master_table.csv` and surfaced here as they land.
 
 ### Visual Audit
-The generated paths exhibit the look of rough volatility—rapid mean reversion and sharp local spikes—indistinguishable from real high-frequency financial data.
+`results/master_figure.png` and `results/fractalsig_cover.png` show qualitative comparisons against Fourier-based baselines from the original prototype. These remain useful as a *visual* sanity check but should not be read as quantitative claims.
 
 ---
 
@@ -201,14 +251,26 @@ The generated paths exhibit the look of rough volatility—rapid mean reversion 
 
 ```text
 fractalsig/
-├── fractalsig/          # Core PyTorch library (Decoder, Data Gen)
-├── SigDiffusions/       # JAX submodule for Signature Diffusion
-├── conf/                # Hydra configuration (profiles, models)
-├── data/                # Generated datasets (.npy)
-├── results/             # Plots and generated visualizations
-├── notebooks/           # Jupyter notebooks for analysis & reasoning
-├── scripts/             # Utility scripts
-└── main.py              # Unified CLI Entry Point
+├── fractalsig/                   # Core PyTorch library
+│   ├── decoder.py                # FractalDecoder + pluggable backbones
+│   ├── losses.py                 # ScaleWeightedMSE
+│   ├── train_decoder.py          # train/val + early stopping
+│   ├── seeding.py                # determinism helper
+│   ├── registries.py             # DATASETS / BASELINES / METRICS
+│   ├── data_gen.py               # legacy fBM generator
+│   ├── datasets/                 # 5 registered datasets
+│   └── runners/                  # train_runner + sweep_runner
+├── tests/                        # pytest smoke + integration suite
+├── SigDiffusions/                # JAX submodule for Signature Diffusion
+├── conf/                         # Hydra configuration (profile/{laptop,cluster})
+├── data/                         # Generated datasets (.npy / cached)
+├── results/                      # Plots and generated visualizations
+├── notebooks/                    # Jupyter notebooks for analysis
+├── scripts/                      # download_datasets.py, generate_figure.py, ...
+├── docs/                         # triage report and design notes
+├── .github/workflows/ci.yml      # Lint + type + smoke tests
+├── pyproject.toml                # ruff/mypy/pytest config; requires Python >=3.11,<3.14
+└── main.py                       # Unified CLI Entry Point (legacy auto/gen_data/train_decoder/train_jax/sample)
 ```
 
 ---

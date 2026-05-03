@@ -27,8 +27,10 @@ jobs:
           python -m pip install --upgrade pip
           # CPU-only torch (no JAX, no CUDA — sufficient for smoke tests).
           pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          # iisignature's setup.py imports numpy at build time, so numpy must
+          # be installed in the build env before pip starts resolving it.
+          pip install numpy==2.2.2
           pip install \
-            numpy==2.2.2 \
             scipy==1.15.1 \
             pywavelets==1.9.0 \
             ptwt==1.0.1 \
