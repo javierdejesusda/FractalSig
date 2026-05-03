@@ -17,9 +17,9 @@ sympy==1.13.1
 torch==2.5.1
 
 # Signature & Wavelets
-# IMPORTANT: iisignature requires --no-build-isolation to compile correctly on some WSL2 environments
-# Run: pip install iisignature==0.24 --no-build-isolation
-# iisignature==0.24
+# iisignature compiles C++ extensions; the wheel is published for cpython 3.11 on linux_x86_64.
+# If pip cannot find a compatible wheel, install with: pip install iisignature==0.24 --no-build-isolation
+iisignature==0.24
 ptwt==1.0.1
 pywavelets==1.9.0
 

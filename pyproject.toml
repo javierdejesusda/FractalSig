@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fractalsig"
+version = "0.2.0"
+description = "Wavelet-based decoder for rough/fractal signal generation."
+requires-python = ">=3.11,<3.14"
+readme = "README.md"
+license = {file = "LICENSE"}
+
+[tool.setuptools.packages.find]
+include = ["fractalsig*"]
+exclude = ["SigDiffusions*", "tests*", "scripts*", "notebooks*", "outputs*", "checkpoints*", "data*", "results*", "paper*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = [
+    "SigDiffusions",
+    "outputs",
+    "checkpoints",
+    "data",
+    "results",
+    "notebooks",
+    "Miniconda3-latest-Linux-x86_64.sh",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.13"
+strict_optional = true
+warn_unused_ignores = true
+exclude = [
+    "SigDiffusions/",
+    "outputs/",
+    "checkpoints/",
+    "data/",
+    "results/",
+    "notebooks/",
+    "scripts/",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "smoke: fast tests that gate CI (≤ 30 s total)",
+    "integration: slow tests that train tiny models end-to-end",
+    "gpu: requires CUDA",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:pkg_resources",
+    "ignore::PendingDeprecationWarning",
+]
