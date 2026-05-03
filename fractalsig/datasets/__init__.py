@@ -6,6 +6,7 @@ fractalsig.registries.DATASETS so they can be looked up by name.
 from __future__ import annotations
 
 from fractalsig.datasets import (
+    audio_esc50,  # noqa: F401
     eeg_chbmit,  # noqa: F401
     sp500_intraday,  # noqa: F401
     synthetic_fbm,  # noqa: F401
