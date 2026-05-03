@@ -4,12 +4,11 @@ This module provides utilities for generating rough paths with Hurst parameter
 H ≈ 0.1, specifically designed for neural network training.
 """
 
+import logging
 import warnings
-from typing import Optional
 
 import numpy as np
 import torch
-import logging
 from fbm import FBM
 
 log = logging.getLogger(__name__)
@@ -42,7 +41,7 @@ def generate_rough_paths(
     seq_len: int,
     n_channels: int,
     H: float = 0.1,
-    seed: Optional[int] = None,
+    seed: int | None = None,
     standardize: bool = True
 ) -> torch.Tensor:
     """Generate robust Fractional Brownian Motion paths with rough volatility.

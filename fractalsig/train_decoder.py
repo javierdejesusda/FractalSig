@@ -16,24 +16,21 @@ Usage:
 
 import argparse
 import json
-import os
+import logging
 from pathlib import Path
-from typing import Dict, Optional, Tuple
 
+import iisignature
 import numpy as np
 import pywt
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset
-
-import logging
-import iisignature
 from tqdm import tqdm
-
-log = logging.getLogger(__name__)
 
 from fractalsig.data_gen import generate_rough_paths
 from fractalsig.decoder import FractalDecoder
+
+log = logging.getLogger(__name__)
 
 
 class RoughPathDataset(Dataset):
@@ -62,9 +59,9 @@ class RoughPathDataset(Dataset):
         H: float = 0.1,
         sig_depth: int = 4,
         wavelet: str = "db4",
-        level: Optional[int] = None,
+        level: int | None = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
-        seed: Optional[int] = None,
+        seed: int | None = None,
     ) -> None:
         """Initialize the dataset.
 
@@ -169,7 +166,7 @@ class RoughPathDataset(Dataset):
     def _normalize(
         self,
         tensor: torch.Tensor
-    ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Normalize tensor to zero mean/unit variance.
 
         Args:
@@ -190,7 +187,7 @@ class RoughPathDataset(Dataset):
     def __len__(self) -> int:
         return self.n_samples
 
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
         return self.log_signatures[idx], self.wavelet_coeffs[idx]
 
     def save_stats(self, filepath: str) -> None:
@@ -225,8 +222,8 @@ def train(
     lr: float = 1e-3,
     checkpoint_dir: str = "checkpoints",
     device: str = "cuda" if torch.cuda.is_available() else "cpu",
-    seed: Optional[int] = 42,
-) -> Dict[str, float]:
+    seed: int | None = 42,
+) -> dict[str, float]:
     """Train the FractalDecoder on ground-truth fBM data.
 
     Args:
@@ -307,10 +304,10 @@ def train(
 
     # Training loop
     best_loss = float("inf")
-    history = {"train_loss": []}
+    history: dict[str, list[float]] = {"train_loss": []}
 
     log.info(f"Starting training for {epochs} epochs...")
-    
+
     pbar = tqdm(range(epochs), desc="Training", unit="epoch")
     for epoch in pbar:
         model.train()
@@ -340,7 +337,7 @@ def train(
 
         avg_loss = epoch_loss / n_batches
         history["train_loss"].append(avg_loss)
-        
+
         # Update progress bar
         current_lr = scheduler.get_last_lr()[0]
         pbar.set_postfix({

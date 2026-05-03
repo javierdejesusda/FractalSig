@@ -17,15 +17,14 @@ using pywt. This ensures the MLP output dimension exactly matches the flattened
 wavelet coefficient structure, regardless of configuration.
 """
 
-from typing import List, Optional, Tuple
 
 import numpy as np
-import pywt
-import torch
-import torch.nn as nn
 
 # ptwt provides differentiable wavelet transforms for PyTorch
 import ptwt
+import pywt
+import torch
+import torch.nn as nn
 
 
 class FractalDecoder(nn.Module):
@@ -65,7 +64,7 @@ class FractalDecoder(nn.Module):
         output_seq_len: int,
         out_channels: int = 1,
         wavelet: str = "db4",
-        level: Optional[int] = None,
+        level: int | None = None,
         n_layers: int = 4,
         dropout: float = 0.1,
     ) -> None:
@@ -118,8 +117,8 @@ class FractalDecoder(nn.Module):
         coeffs = pywt.wavedec(dummy_signal, self.wavelet, level=self.level)
 
         # Store shapes and compute slicing indices
-        self.coeff_shapes: List[Tuple[int, ...]] = []
-        self.coeff_slices: List[Tuple[int, int]] = []
+        self.coeff_shapes: list[tuple[int, ...]] = []
+        self.coeff_slices: list[tuple[int, int]] = []
 
         current_idx = 0
         for coeff in coeffs:
@@ -153,7 +152,7 @@ class FractalDecoder(nn.Module):
         Returns:
             Sequential MLP module.
         """
-        layers: List[nn.Module] = []
+        layers: list[nn.Module] = []
 
         # Input layer
         layers.append(nn.Linear(self.input_dim, self.hidden_dim))
@@ -176,7 +175,7 @@ class FractalDecoder(nn.Module):
     def _unflatten_coefficients(
         self,
         flat_coeffs: torch.Tensor
-    ) -> List[torch.Tensor]:
+    ) -> list[torch.Tensor]:
         """Reshape flat MLP output into wavelet coefficient structure.
 
         Args:
@@ -189,7 +188,7 @@ class FractalDecoder(nn.Module):
         batch_size = flat_coeffs.shape[0]
         coeffs = []
 
-        for (start, end), shape in zip(self.coeff_slices, self.coeff_shapes):
+        for (start, end), shape in zip(self.coeff_slices, self.coeff_shapes, strict=False):
             # Extract and reshape coefficient
             coeff = flat_coeffs[:, start:end]
             # ptwt expects (batch, coeff_len) for 1D wavelets
@@ -208,10 +207,6 @@ class FractalDecoder(nn.Module):
         Returns:
             Reconstructed paths of shape (batch, output_seq_len, out_channels).
         """
-        batch_size = log_signature.shape[0]
-        device = log_signature.device
-
-        # Ensure wavelet object is ready
         wavelet = pywt.Wavelet(self.wavelet)
 
         outputs = []
@@ -318,4 +313,4 @@ if __name__ == "__main__":
     total_params = model.get_num_params()
     print(f"Model initialized. Total params: {total_params:,}")
     print(f"Output shape verified: {output.shape}")
-    print(f"Differentiability verified: gradients flow correctly")
+    print("Differentiability verified: gradients flow correctly")

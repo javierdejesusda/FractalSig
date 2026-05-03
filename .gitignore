@@ -40,3 +40,5 @@ SigDiffusions/config/fractal.yaml
 !results/fractalsig_cover.png
 !results/master_figure.png
 !SigDiffusions/SigDiffusions_diagram.png
+# pip editable-install metadata
+fractalsig.egg-info/

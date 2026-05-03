@@ -41,4 +41,4 @@ def test_logsig_grows_with_depth():
     """logsiglength should be monotone in depth."""
     lens = [iisignature.logsiglength(2, d) for d in (2, 3, 4, 5)]
     assert lens == sorted(lens)
-    assert all(b > a for a, b in zip(lens, lens[1:]))
+    assert all(b > a for a, b in zip(lens, lens[1:], strict=False))
